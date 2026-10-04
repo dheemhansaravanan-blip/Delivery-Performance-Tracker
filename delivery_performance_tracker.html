@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Delivery Performance Tracker</title>
+<style>
+:root{--ink:#16212e;--mut:#5b6877;--bg:#eef1f4;--card:#fff;--line:#d5dce3;--acc:#0b6e69;--warn:#a85a00;--bad:#b42318;--good:#1a7f4b}
+*{box-sizing:border-box}body{margin:0;font:14px/1.5 "Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:var(--ink);color:#fff;padding:14px 24px}header h1{margin:0;font-size:20px;font-weight:600}header p{margin:2px 0 0;color:#aab6c3;font-size:12px}
+nav{display:flex;gap:2px;flex-wrap:wrap;background:#fff;border-bottom:1px solid var(--line);padding:0 16px;position:sticky;top:0;z-index:5}
+nav button{border:0;background:none;padding:11px 14px;font:inherit;color:var(--mut);cursor:pointer;border-bottom:3px solid transparent}
+nav button.on{color:var(--ink);font-weight:600;border-color:var(--acc)}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+main{max-width:1200px;margin:18px auto;padding:0 16px}h2{margin:0 0 4px;font-size:18px}h3{margin:18px 0 6px;font-size:15px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:14px 16px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.kpi{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:6px;padding:10px 12px}.kpi b{display:block;font-size:24px;font-weight:600}.kpi span{color:var(--mut);font-size:12px}
+table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}th:first-child,td:first-child{text-align:left}th{background:#f6f8fa;font-weight:600}
+.scroll{overflow-x:auto}.mut{color:var(--mut);font-size:12px}.tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:9px;background:#e3f1ef;color:var(--acc)}.tag.m{background:#fdf0dc;color:var(--warn)}
+.ok{color:var(--good)}.warn{color:var(--warn)}.bad{color:var(--bad)}.note{border-left:4px solid var(--warn);background:#fdf6ea;padding:8px 12px;border-radius:4px;margin:8px 0}.err{border-left-color:var(--bad);background:#fdeceb}
+.bar{display:grid;grid-template-columns:120px 1fr 70px;gap:8px;align-items:center;margin:4px 0}.bar i{background:#e6ebf0;height:14px;border-radius:3px;overflow:hidden}.bar b{display:block;height:100%;background:var(--acc)}.bar em{font-style:normal;text-align:right}
+.row{display:flex;gap:14px;flex-wrap:wrap;align-items:end;margin:6px 0}label{font-size:12px;color:var(--mut);display:flex;flex-direction:column;gap:2px}select,input[type=number]{font:inherit;padding:5px 7px;border:1px solid var(--line);border-radius:4px;min-width:90px}
+input[type=number]{width:90px}textarea{width:100%;min-height:340px;font:13px/1.5 Consolas,monospace;padding:10px;border:1px solid var(--line);border-radius:4px}
+button.p{background:var(--acc);color:#fff;border:0;border-radius:4px;padding:7px 14px;font:inherit;cursor:pointer}.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:800px){.two{grid-template-columns:1fr}.bar{grid-template-columns:90px 1fr 60px}}
+</style></head><body>
+<header><h1>Delivery Performance Tracker</h1><p>Runs entirely in your browser on the shipment CSV you upload. No data is built in, generated or sent anywhere.</p></header>
+<nav id="nav"></nav><main id="view"></main>
+<script>
+const REQ=['shipment_id','origin_dc','destination_city','destination_region','carrier','distance_km','weight_kg','dispatch_date','promised_date','actual_delivery_date','freight_cost_inr','status','payment_mode'];
+const TABS=[['overview','Overview'],['carrier','Carrier Performance'],['region','Region Performance'],['score','Carrier Scorecard'],['save','Savings Scenario'],['rec','Recommendation'],['audit','Methodology & Data Audit']];
+let DATA=null,AUDIT=null,UPLOAD_ERR=null,EMAILC=null;
+const S={tab:'overview',car:'',reg:'',w:{otd:30,q:30,c:30,d:10},minN:10,otdMin:85,excMax:4,shift:50,lane:'od'};
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pc=v=>v==null?'n/a':v.toFixed(1)+'%',d2=v=>v==null?'n/a':v.toFixed(2),inr=v=>v==null?'n/a':'₹'+Math.round(v).toLocaleString('en-IN'),kg=v=>v==null?'n/a':v.toFixed(1)+' kg',n0=v=>v==null?'n/a':Math.round(v).toLocaleString('en-IN');
+/* ---------- CSV + parsing ---------- */
+function parseCSV(t){t=t.replace(/^\uFEFF/,'');const f0=t.split(/\r?\n/)[0],d=[',',';','\t'].map(c=>[c,f0.split(c).length]).sort((a,b)=>b[1]-a[1])[0][0];
+let rows=[],r=[],f='',q=false;for(let i=0;i<t.length;i++){const c=t[i];
+if(q){if(c=='"'){if(t[i+1]=='"'){f+='"';i++}else q=false}else f+=c}
+else if(c=='"')q=true;else if(c==d){r.push(f);f=''}
+else if(c=='\n'||c=='\r'){if(c=='\r'&&t[i+1]=='\n')i++;r.push(f);rows.push(r);r=[];f=''}else f+=c}
+if(f!==''||r.length){r.push(f);rows.push(r)}return rows.filter(x=>x.some(v=>v.trim()!==''))}
+const num=v=>{v=String(v??'').replace(/[₹,\s]/g,'');if(v==='')return null;const n=Number(v);return isFinite(n)?n:null};
+function mk(y,m,d){const t=Date.UTC(y,m-1,d),x=new Date(t);return x.getUTCFullYear()==y&&x.getUTCMonth()==m-1&&x.getUTCDate()==d?t/864e5:null}
+function dateOrder(vals){let a=false,b=false,sl=false;for(const v of vals){const m=String(v).trim().match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);if(m){sl=true;if(+m[1]>12)a=true;if(+m[2]>12)b=true}}return{order:b&&!a?'mdy':'dmy',ambiguous:sl&&!a&&!b,seen:a||b}}
+function pdate(v,o){v=String(v??'').trim();let m;if(!v)return null;
+if(m=v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/))return mk(+m[1],+m[2],+m[3]);
+if(m=v.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/))return o=='mdy'?mk(+m[3],+m[1],+m[2]):mk(+m[3],+m[2],+m[1]);
+if(/^\d{5}(\.\d+)?$/.test(v))return Math.floor(+v)-25569;return null}
+const normSt=s=>{s=String(s??'').trim().toLowerCase();return s=='rto'?'returned to origin':s};
+function load(text){const rows=parseCSV(text);if(rows.length<2)throw new Error('The file has no data rows.');
+const head=rows[0].map(h=>h.trim().toLowerCase()),miss=REQ.filter(c=>!head.includes(c));
+if(miss.length){DATA=null;AUDIT={missingCols:miss,found:rows[0]};return}
+const ix={};REQ.forEach(c=>ix[c]=head.indexOf(c));const body=rows.slice(1),col=c=>body.map(r=>r[ix[c]]);
+const DC=['dispatch_date','promised_date','actual_delivery_date'],ord={};DC.forEach(c=>ord[c]=dateOrder(col(c)));
+const A={missingCols:[],blank:{},badDate:{},badNum:{},dateOrder:ord,unknownStatus:{},delNoDate:0,actBeforeDisp:0,dup:0,nonPosW:0};
+REQ.forEach(c=>{A.blank[c]=0});DC.forEach(c=>A.badDate[c]=0);['distance_km','weight_kg','freight_cost_inr'].forEach(c=>A.badNum[c]=0);
+const seen=new Set();DATA=body.map(r=>{const g=c=>r[ix[c]]??'';REQ.forEach(c=>{if(String(g(c)).trim()==='')A.blank[c]++});
+const o={id:g('shipment_id').trim(),org:g('origin_dc').trim(),city:g('destination_city').trim(),reg:g('destination_region').trim(),car:g('carrier').trim(),st:normSt(g('status')),pay:g('payment_mode').trim()};
+DC.forEach((c,i)=>{const v=pdate(g(c),ord[c].order);if(v==null&&String(g(c)).trim()!=='')A.badDate[c]++;o[['disp','prom','act'][i]]=v});
+[['distance_km','dist'],['weight_kg','wt'],['freight_cost_inr','cost']].forEach(([c,k])=>{const v=num(g(c));if(v==null&&String(g(c)).trim()!=='')A.badNum[c]++;o[k]=v});
+if(o.wt!=null&&o.wt<=0)A.nonPosW++;if(o.id){if(seen.has(o.id))A.dup++;seen.add(o.id)}
+if(!['delivered','damaged','returned to origin'].includes(o.st))A.unknownStatus[o.st||'(blank)']=(A.unknownStatus[o.st||'(blank)']||0)+1;
+if(o.st=='delivered'&&(o.prom==null||o.act==null))A.delNoDate++;if(o.act!=null&&o.disp!=null&&o.act<o.disp)A.actBeforeDisp++;return o});
+A.rows=DATA.length;AUDIT=A;S.car='';S.reg=''}
+/* ---------- KPI engine ---------- */
+const isDel=r=>r.st=='delivered'; // single definition: status == "Delivered"
+function K(rows){const n=rows.length;let del=0,on=0,late=0,dm=0,rt=0,c=0,w=0,wa=0,wn=0,skipC=0;
+for(const r of rows){if(r.st=='damaged')dm++;if(r.st=='returned to origin')rt++;
+if(isDel(r)&&r.prom!=null&&r.act!=null){del++;late+=Math.max(0,r.act-r.prom);if(r.act<=r.prom)on++}
+if(r.cost!=null&&r.wt!=null&&r.wt>0){c+=r.cost;w+=r.wt}else skipC++;if(r.wt!=null){wa+=r.wt;wn++}}
+const p=(a,b)=>b>0?a/b*100:null;return{n,del,on,otd:p(on,del),late:del?late/del:null,cpk:w>0?c/w:null,cost:c,wt:w,dmg:p(dm,n),rto:p(rt,n),exc:p(dm+rt,n),avgW:wn?wa/wn:null,dm,rt,skipC}}
+const uniq=k=>[...new Set(DATA.map(r=>r[k]).filter(Boolean))].sort();
+const filt=(useReg=true)=>DATA.filter(r=>(!S.car||r.car==S.car)&&(!useReg||!S.reg||r.reg==S.reg));
+/* ---------- scorecard ---------- */
+function scoreModel(){const wsum=S.w.otd+S.w.q+S.w.c+S.w.d;const g=uniq('car').map(c=>({c,k:K(DATA.filter(r=>r.car==c))}));
+g.forEach(x=>{x.ok=x.k.n>=S.minN&&[x.k.otd,x.k.exc,x.k.cpk,x.k.late].every(v=>v!=null)});const ok=g.filter(x=>x.ok);let flat=[];
+const nz=(v,a,hi)=>{const mn=Math.min(...a),mx=Math.max(...a);if(mx-mn<1e-12){return 50}return(hi?v-mn:mx-v)/(mx-mn)*100};
+const spread=a=>Math.max(...a)-Math.min(...a)<1e-12;
+const M={otd:[x=>x.k.otd,1],q:[x=>x.k.exc,0],c:[x=>x.k.cpk,0],d:[x=>x.k.late,0]};
+for(const m in M){const a=ok.map(M[m][0]);if(ok.length&&spread(a))flat.push(m);ok.forEach(x=>{x['s'+m]=nz(M[m][0](x),a,M[m][1])})}
+g.forEach(x=>{x.tot=x.ok&&wsum>0?(S.w.otd*x.sotd+S.w.q*x.sq+S.w.c*x.sc+S.w.d*x.sd)/wsum:null;x.grade=x.tot==null?'n/a':x.tot>=80?'A':x.tot>=65?'B':x.tot>=50?'C':'D'});
+return{g,wsum,flat,ranked:g.filter(x=>x.tot!=null).sort((a,b)=>b.tot-a.tot)}}
+/* ---------- savings ---------- */
+function savingsModel(){const lk=r=>S.lane=='od'?r.org+' → '+r.reg:r.reg,L={};
+DATA.forEach(r=>{((L[lk(r)]??={})[r.car]??=[]).push(r)});const out=[];let cur=0,bc=0,wt=0;
+for(const lane of Object.keys(L).sort()){const cells=Object.entries(L[lane]).map(([c,rs])=>({c,k:K(rs)}));
+const el=cells.filter(x=>x.k.n>=S.minN&&x.k.otd!=null&&x.k.otd>=S.otdMin&&x.k.exc!=null&&x.k.exc<=S.excMax&&x.k.cpk!=null);
+if(!el.length){const why=cells.every(x=>x.k.n<S.minN)?'sample < '+S.minN:'no carrier meets OTD/exception thresholds';out.push({lane,none:why});continue}
+const b=el.reduce((a,x)=>x.k.cpk<a.k.cpk?x:a);let lc=0,lw=0;const from=[];
+cells.filter(x=>x.c!=b.c&&x.k.cpk!=null&&x.k.cpk>b.k.cpk).forEach(x=>{lc+=x.k.cost*S.shift/100;lw+=x.k.wt*S.shift/100;from.push(x.c)});
+const lb=lw*b.k.cpk;cur+=lc;bc+=lb;wt+=lw;out.push({lane,b:b.c,bk:b.k,lw,lc,lb,sv:lc-lb,from})}
+return{rows:out,cur,bc,wt,sv:cur-bc,total:K(DATA).cost,nb:out.filter(r=>r.b).length}}
+/* ---------- text generation ---------- */
+function carrierStats(){return uniq('car').map(c=>({c,k:K(DATA.filter(r=>r.car==c))}))}
+const best=(a,f,hi)=>a.filter(x=>f(x)!=null).sort((x,y)=>hi?f(y)-f(x):f(x)-f(y))[0];
+function recText(){const T=K(DATA),cs=carrierStats(),sm=scoreModel(),sv=savingsModel(),rg=uniq('reg').map(r=>({c:r,k:K(DATA.filter(x=>x.reg==r))}));
+const o1=best(cs,x=>x.k.otd,1),o2=best(cs,x=>x.k.otd,0),c1=best(cs,x=>x.k.cpk,0),c2=best(cs,x=>x.k.cpk,1),e1=best(cs,x=>x.k.exc,0),e2=best(cs,x=>x.k.exc,1),r2=best(rg,x=>x.k.otd,0),r1=best(rg,x=>x.k.otd,1);
+const P=[];P.push(['Operational performance',`Across ${n0(T.n)} shipments, OTD is ${pc(T.otd)} with an average of ${d2(T.late)} late days per delivered shipment. ${o1&&o2?`${o1.c} leads on OTD (${pc(o1.k.otd)}); ${o2.c} is lowest (${pc(o2.k.otd)}).`:''} ${r1&&r2?`By destination region, ${r1.c} is strongest (${pc(r1.k.otd)}) and ${r2.c} weakest (${pc(r2.k.otd)}).`:''}`]);
+P.push(['Cost efficiency',`Network freight cost is ${inr(T.cpk)}/kg (total cost ÷ total weight). ${c1&&c2?`${c1.c} is cheapest at ${inr(c1.k.cpk)}/kg and ${c2.c} the most expensive at ${inr(c2.k.cpk)}/kg. Cost per kg is not adjusted for distance or parcel-weight mix, so read gaps as indicative.`:''}`]);
+P.push(['Quality and exceptions',`Damage rate is ${pc(T.dmg)}, RTO rate ${pc(T.rto)}, combined ${pc(T.exc)}. ${e1&&e2?`Combined exceptions range from ${pc(e1.k.exc)} (${e1.c}) to ${pc(e2.k.exc)} (${e2.c}).`:''}`]);
+P.push(['Scorecard (management model, weights are assumptions)',sm.ranked.length?`With weights OTD ${S.w.otd}%, Quality ${S.w.q}%, Cost ${S.w.c}%, Delay ${S.w.d}%, the model ranks ${sm.ranked.map(x=>`${x.c} (${x.tot.toFixed(0)})`).join(', ')}. Scores are relative to the carriers in this dataset, so they show ordering under these assumptions, not an objectively "best" carrier.`:'Not enough data to score carriers.']);
+P.push(['Potential savings',sv.nb?`Using the ${S.lane=='od'?'origin DC → region':'destination region'} lane definition and a ${S.shift}% shift, ${sv.nb} lane(s) have a qualifying benchmark (sample ≥ ${S.minN}, OTD ≥ ${S.otdMin}%, exception rate ≤ ${S.excMax}%). Estimated/potential savings are ${inr(sv.sv)} on ${kg(sv.wt)} of eligible volume (${sv.total?(sv.sv/sv.total*100).toFixed(1):'0.0'}% of total freight spend). Estimated / potential savings – not guaranteed.`:`No lane has a carrier meeting the benchmark thresholds (sample ≥ ${S.minN}, OTD ≥ ${S.otdMin}%, exception rate ≤ ${S.excMax}%), so no savings are estimated. Change the thresholds or lane definition on the Savings tab to explore.`]);
+const act=[];if(o2&&T.otd!=null&&o2.k.otd<T.otd)act.push(`Open a performance review with ${o2.c} on OTD (${pc(o2.k.otd)} vs network ${pc(T.otd)}).`);if(e2&&e2.k.exc>T.exc)act.push(`Ask ${e2.c} for a damage/RTO root-cause plan (${pc(e2.k.exc)} vs network ${pc(T.exc)}).`);if(sv.nb)act.push('Pilot a partial volume shift on qualifying lanes only, and track OTD and exceptions before extending; do not move all volume to one carrier on this evidence alone.');else act.push('Hold volume allocation steady until a lane shows a qualifying benchmark.');
+return{P,act}}
+function emailText(c){const T=K(DATA),k=K(DATA.filter(r=>r.car==c)),rg=uniq('reg').map(r=>({r,k:K(DATA.filter(x=>x.car==c&&x.reg==r))})).filter(x=>x.k.n>=S.minN),wo=best(rg,x=>x.k.otd,0),we=best(rg,x=>x.k.exc,1),sm=scoreModel().g.find(x=>x.c==c);
+const L=[];if(k.otd!=null&&T.otd!=null)L.push(`- On-time delivery: ${pc(k.otd)} vs network ${pc(T.otd)} (${k.del} delivered shipments).`);if(k.late!=null)L.push(`- Average late days per delivered shipment: ${d2(k.late)} vs network ${d2(T.late)}.`);if(k.cpk!=null)L.push(`- Freight cost: ${inr(k.cpk)}/kg vs network ${inr(T.cpk)}/kg.`);L.push(`- Damage ${pc(k.dmg)}, RTO ${pc(k.rto)}, combined ${pc(k.exc)} vs network combined ${pc(T.exc)}.`);
+const R=[];if(wo&&wo.k.otd!=null)R.push(`- Lowest regional OTD: ${wo.r} at ${pc(wo.k.otd)} (${wo.k.n} shipments).`);if(we&&we.k.exc!=null)R.push(`- Highest regional exception rate: ${we.r} at ${pc(we.k.exc)} (${we.k.n} shipments).`);if(k.otd!=null&&T.otd!=null&&k.otd<T.otd)R.push('- OTD below network average.');if(k.exc!=null&&T.exc!=null&&k.exc>T.exc)R.push('- Damage/RTO above network average.');if(k.cpk!=null&&T.cpk!=null&&k.cpk>T.cpk)R.push('- Cost per kg above network average.');if(!R.length)R.push('- No metric is worse than the network average; this is a routine review.');
+return `Subject: Delivery performance review – ${c} (${n0(k.n)} shipments)\n\nHi ${c} team,\n\nWe have reviewed shipment data covering ${n0(T.n)} shipments across the network, of which ${n0(k.n)} were handled by ${c}. Key observations:\n\n${L.join('\n')}\n${sm&&sm.tot!=null?`- Internal scorecard (management weighting, relative to our carrier set): ${sm.tot.toFixed(0)}/100.\n`:''}\nAreas requiring review:\n${R.join('\n')}\n\nSuggested discussion points:\n1. Root causes behind late deliveries and any recurring lane-level delays.\n2. Packaging and handling controls to reduce damage, and the RTO process (address verification, delivery attempts).\n3. Corrective actions and a 60-day improvement plan with agreed targets.\n4. Rate card review, given freight cost per kg versus the network.\n\nPlease share your response before our review meeting.\n\nRegards,\nLogistics Performance Team`}
+/* ---------- UI ---------- */
+const bar=(l,v,mx,t)=>`<div class=bar><span>${esc(l)}</span><i><b style="width:${v!=null&&mx>0?Math.max(0,Math.min(100,v/mx*100)):0}%"></b></i><em>${t}</em></div>`;
+const kpi=(l,v)=>`<div class=kpi><b>${v}</b><span>${l}</span></div>`;
+const tbl=(h,rows)=>`<div class=scroll><table><tr>${h.map(x=>`<th>${x}</th>`).join('')}</tr>${rows.map(r=>`<tr>${r.map(x=>`<td>${x}</td>`).join('')}</tr>`).join('')}</table></div>`;
+const need=()=>`<div class="card note"><b>Please upload the shipment dataset.</b> Go to Overview and upload the CSV exported from the Shipments sheet. No numbers are shown until real data is loaded.</div>`;
+const sel=(id,lab,opts,val,fn)=>`<label>${lab}<select onchange="${fn}(this.value)">${opts.map(o=>`<option value="${esc(o)}" ${o==val?'selected':''}>${esc(o||'All')}</option>`).join('')}</select></label>`;
+const setS=(k,v)=>{S[k]=v;render()};
+const filters=(reg=true)=>`<div class=row>${sel('c','Carrier',['',...uniq('car')],S.car,"setS.bind(null,'car')")}${reg?sel('r','Destination region',['',...uniq('reg')],S.reg,"setS.bind(null,'reg')"):''}</div>`;
+const kpiRow=k=>`<div class=grid>${kpi('Total shipments',n0(k.n))}${kpi('Operational OTD',pc(k.otd))}${kpi('Avg late days (delivered)',d2(k.late))}${kpi('Freight cost per kg',inr(k.cpk))}${kpi('Damage/RTO exception rate',pc(k.exc))}${kpi('Damage rate',pc(k.dmg))}${kpi('RTO rate',pc(k.rto))}</div>`;
+const statRows=(items)=>items.map(x=>[esc(x.c),n0(x.k.n),pc(x.k.otd),d2(x.k.late),inr(x.k.cpk),pc(x.k.dmg),pc(x.k.rto),pc(x.k.exc)]);
+const SH=['Shipments','OTD %','Avg late days','Cost/kg','Damage rate','RTO rate','Combined exc.'];
+function auditPanel(){const A=AUDIT;if(!A)return '';
+if(A.missingCols.length)return `<div class="card note err"><b>Required columns missing:</b> ${A.missingCols.map(esc).join(', ')}.<br>Columns found in your file: ${A.found.map(esc).join(', ')}.<br>Nothing was loaded. Export the Shipments sheet again with the original headers.</div>`;
+const sum=o=>Object.values(o).reduce((a,b)=>a+b,0),blank=Object.entries(A.blank).filter(([,v])=>v);
+const amb=Object.entries(A.dateOrder).filter(([,v])=>v.ambiguous).map(([k])=>k);
+return `<div class=card><h3 style="margin-top:0">Upload validation</h3><div class=grid>${kpi('Records loaded',n0(A.rows))}${kpi('Required columns','<span class=ok>All 13 present</span>')}${kpi('Duplicate shipment IDs',`<span class="${A.dup?'bad':'ok'}">${A.dup}</span>`)}${kpi('Invalid dates',`<span class="${sum(A.badDate)?'bad':'ok'}">${sum(A.badDate)}</span>`)}</div>
+<p><b>Missing values:</b> ${blank.length?blank.map(([k,v])=>`${esc(k)}: ${v}`).join(', '):'none in any column'}.<br><b>Date parsing:</b> ${Object.entries(A.badDate).map(([k,v])=>`${k}: ${v} unparseable`).join('; ')}.${amb.length?` <span class=warn>Dates written like 03/04/2025 could not be told apart (day-first vs month-first); read as day-first.</span>`:''}<br><b>Invalid numbers:</b> ${Object.entries(A.badNum).map(([k,v])=>`${k}: ${v}`).join('; ')}.${A.nonPosW?` <span class=warn>${A.nonPosW} rows have weight ≤ 0 and are left out of cost/kg.</span>`:''}</p>
+${Object.keys(A.unknownStatus).length?`<div class=note>Unrecognised status values (counted in totals, not as delivered/damaged/RTO): ${Object.entries(A.unknownStatus).map(([k,v])=>`${esc(k)} (${v})`).join(', ')}</div>`:''}
+${A.delNoDate?`<div class=note>${A.delNoDate} delivered shipments lack a valid promised/actual date and are excluded from OTD and late-day averages.</div>`:''}
+${A.dup?`<div class=note>Duplicate IDs are reported but not removed; every row is counted. Check the source before relying on results.</div>`:''}</div>`}
+const REF={n:1200,del:1095,otd:62.37,late:0.563,cpk:147.56,dmg:3.50,rto:5.25,exc:8.75}; // evidence for testing only; never used in any dashboard calculation
+function verifyPanel(){const f=(v,d)=>v==null?null:Math.round(v*10**d)/10**d;let live=null,res=null;
+if(DATA){const k=K(DATA);live={n:k.n,del:k.del,otd:f(k.otd,2),late:f(k.late,3),cpk:f(k.cpk,2),dmg:f(k.dmg,2),rto:f(k.rto,2),exc:f(k.exc,2)};res=Object.keys(REF).every(m=>live[m]===REF[m])}
+const rows=[['Total shipments','n',n0(REF.n),0],['Delivered shipments','del',n0(REF.del),0],['Operational OTD','otd',REF.otd.toFixed(2)+'%',2],['Average late days','late',REF.late.toFixed(3),3],['Freight cost/kg','cpk','₹'+REF.cpk.toFixed(2),2],['Damage rate','dmg',REF.dmg.toFixed(2)+'%',2],['RTO rate','rto',REF.rto.toFixed(2)+'%',2],['Combined exception rate','exc',REF.exc.toFixed(2)+'%',2]];
+const status=!DATA?'<span class=warn>Overall KPI verification: not run (upload the shipment CSV)</span>':res?'<span class=ok>Overall KPI verification: PASS</span>':'<span class=bad>Overall KPI verification: DIFFERS – the loaded file does not reproduce the reference values (it may not be the original Shipments sheet)</span>';
+return `<div class=card><h3 style="margin-top:0">Verification Check</h3><p><b>${status}</b></p><p>The application's calculated overall KPIs were independently checked against the source Shipments workbook. This does not claim that every filter combination has been independently verified.</p>
+<p class=mut>Reference values independently checked against the assignment Shipments workbook. They are evidence for testing only and are not used in any dashboard calculation. The "Calculated now" column is recomputed from the uploaded CSV (unfiltered).</p>
+${tbl(['Metric','Reference value','Calculated now','Match'],rows.map(([l,k,r,d])=>{const v=live?live[k]:null;const t=v==null?(live?'n/a':'–'):(k=='cpk'?'₹'+v.toFixed(2):k=='otd'||k=='dmg'||k=='rto'||k=='exc'?v.toFixed(2)+'%':k=='late'?v.toFixed(3):n0(v));return [l,r,t,live?(v===REF[k]?'<span class=ok>✓</span>':'<span class=bad>✗</span>'):'–']}))}</div>`}
+const V={
+overview(){const up=`<div class=card><h2>Load shipment data</h2><p>Export the Shipments sheet from the assignment workbook as CSV and upload it here.</p><div class=row><input type=file id=f accept=".csv,text/csv" onchange="onFile(this.files[0])"></div>${UPLOAD_ERR?`<div class="note err">${esc(UPLOAD_ERR)}</div>`:''}</div>`;
+if(!DATA)return up+auditPanel()+(AUDIT?'':need());const rows=filt(),k=K(rows),cs=uniq('car').filter(c=>!S.car||c==S.car).map(c=>({c,k:K(rows.filter(r=>r.car==c))})),rs=uniq('reg').filter(c=>!S.reg||c==S.reg).map(c=>({c,k:K(rows.filter(r=>r.reg==c))}));
+return up+auditPanel()+`<h2>Overview</h2>${filters()}${k.n?kpiRow(k):'<div class=note>No shipments match the current filters.</div>'}<div class=two><div class=card><h3 style="margin-top:0">OTD % by carrier</h3>${cs.map(x=>bar(x.c,x.k.otd,100,pc(x.k.otd))).join('')}</div><div class=card><h3 style="margin-top:0">Damage/RTO rate by region</h3>${rs.map(x=>bar(x.c,x.k.exc,Math.max(...rs.map(y=>y.k.exc||0),1),pc(x.k.exc))).join('')}</div></div>`},
+carrier(){if(!DATA)return need();const rows=filt(),cs=uniq('car').filter(c=>!S.car||c==S.car).map(c=>({c,k:K(rows.filter(r=>r.car==c))})).filter(x=>x.k.n);
+return `<h2>Carrier Performance</h2>${filters()}${cs.length?tbl(['Carrier',...SH,'Avg parcel kg'],cs.map((x,i)=>[...statRows([x])[0],kg(x.k.avgW)])):'<div class=note>No shipments match the current filters.</div>'}<p class=mut>OTD uses delivered shipments only; rates use all shipments in the filter. Blank "n/a" means a zero denominator.</p>`},
+region(){if(!DATA)return need();const rows=filt(false),regs=['North','South','East','West'].concat(uniq('reg').filter(r=>!['North','South','East','West'].includes(r)));
+return `<h2>Region Performance</h2>${filters(false)}`+regs.map(r=>{const rr=rows.filter(x=>x.reg==r),t=K(rr);if(!rr.length)return `<h3>${r}</h3><div class=note>No shipments for ${r} with this filter.</div>`;
+const cs=uniq('car').map(c=>({c,k:K(rr.filter(x=>x.car==c))})).filter(x=>x.k.n);return `<h3>${esc(r)}</h3>${tbl(['Carrier / total',...SH],[...statRows([{c:'All carriers',k:t}]).map(x=>x.map((v,i)=>i?`<b>${v}</b>`:`<b>${v}</b>`)),...statRows(cs)])}`}).join('')},
+score(){if(!DATA)return need();const m=scoreModel(),W=(k,l)=>`<label>${l} %<input type=number min=0 value=${S.w[k]} onchange="S.w.${k}=Math.max(0,+this.value||0);render()"></label>`;
+return `<h2>Carrier Scorecard</h2><p><span class="tag m">Management assumptions – configurable</span> The weights below are not supplied by the dataset. This is a management scoring model, not an objective ranking of the "best" carrier. Uses all data (filters not applied).</p><div class=card><div class=row>${W('otd','OTD')}${W('q','Quality / exceptions')}${W('c','Cost per kg')}${W('d','Delay severity')}<label>Min. shipments<input type=number min=1 value=${S.minN} onchange="S.minN=Math.max(1,+this.value||1);render()"></label></div>${m.wsum!=100?`<div class=note>Weights sum to ${m.wsum}%; they are rescaled to 100% for the total.${m.wsum<=0?' Total cannot be computed with zero weights.':''}</div>`:''}</div>
+${tbl(['Carrier','Shipments','OTD score','Quality score','Cost score','Delay score','Weighted total','Grade'],m.g.map(x=>x.ok?[esc(x.c),n0(x.k.n),x.sotd.toFixed(0),x.sq.toFixed(0),x.sc.toFixed(0),x.sd.toFixed(0),`<b>${x.tot==null?'n/a':x.tot.toFixed(1)}</b>`,x.grade]:[esc(x.c),n0(x.k.n),'insufficient data','','','','n/a','n/a']))}
+${m.flat.length?`<div class=note>All carriers have identical values for: ${m.flat.join(', ')}. Normalisation range is zero, so a neutral 50 is assigned for that component.</div>`:''}
+<p class=mut>Scores: min–max normalisation across scored carriers (0 = worst, 100 = best). Higher is better for OTD; lower is better for exception rate, cost/kg and average late days (inverted). Grades are relative: A ≥ 80, B ≥ 65, C ≥ 50, D below. Min–max stretches small gaps, so check raw values:</p>
+${tbl(['Carrier','OTD %','Combined exc.','Cost/kg','Avg late days'],m.g.map(x=>[esc(x.c),pc(x.k.otd),pc(x.k.exc),inr(x.k.cpk),d2(x.k.late)]))}`},
+save(){if(!DATA)return need();const m=savingsModel(),I=(k,l,st)=>`<label>${l}<input type=number step="${st||1}" value=${S[k]} onchange="S.${k}=Math.max(0,+this.value||0);render()"></label>`;
+return `<h2>Savings Scenario</h2><p><span class="tag m">Management assumptions – configurable</span> Benchmark thresholds and lane definition below are assumptions, not dataset facts.</p><div class=card><div class=row><label>Volume shift<select onchange="setS('shift',+this.value)">${[25,50,100].map(v=>`<option value=${v} ${S.shift==v?'selected':''}>${v}%</option>`).join('')}</select></label>${I('minN','Min. lane sample')}${I('otdMin','Benchmark OTD ≥ %')}${I('excMax','Benchmark exception ≤ %','0.5')}<label>Lane definition<select onchange="setS('lane',this.value)"><option value=od ${S.lane=='od'?'selected':''}>Origin DC → destination region</option><option value=reg ${S.lane=='reg'?'selected':''}>Destination region only</option></select></label></div></div>
+<div class=grid>${kpi('Current cost of eligible volume',inr(m.cur))}${kpi('Benchmark cost (same kg)',inr(m.bc))}${kpi('Eligible volume',kg(m.wt))}${kpi('Est. total freight after shift',inr(m.total-m.sv))}${kpi('Estimated / potential savings',`<span class=ok>${inr(m.sv)}</span>`)}</div>
+<p class=mut><b>Estimated / potential savings – not guaranteed.</b> In each lane the benchmark is the qualifying carrier with the lowest cost/kg. Savings = (current cost of the shifted share of costlier carriers' shipments) − (shifted kg × benchmark cost/kg). Unadjusted for parcel mix, distance, capacity or service differences. It does not recommend moving all volume to one carrier.</p>
+${m.nb?'':'<div class=note>No lane has a carrier meeting the thresholds, so savings are zero. Relax thresholds or change the lane definition to explore.</div>'}
+${tbl(['Lane','Benchmark','Bench. sample','Bench. OTD','Bench. exc.','Bench. cost/kg','Eligible kg','Current cost','Benchmark cost','Savings'],m.rows.map(r=>r.none?[esc(r.lane),`<span class=mut>none (${r.none})</span>`,'','','','','','','','']:[esc(r.lane),esc(r.b),r.bk.n,pc(r.bk.otd),pc(r.bk.exc),inr(r.bk.cpk),r.lw.toFixed(1),inr(r.lc),inr(r.lb),inr(r.sv)]))}`},
+rec(){if(!DATA)return need();const r=recText(),cs=uniq('car'),sm=scoreModel();EMAILC=EMAILC&&cs.includes(EMAILC)?EMAILC:(sm.ranked.length?sm.ranked[sm.ranked.length-1].c:cs[0]);
+return `<h2>Business Recommendation</h2><p class=mut>Generated from the loaded data and the current assumptions. Figures change if the data or settings change.</p><div class=card>${r.P.map(([h,t])=>`<h3 style="margin-top:6px">${h}</h3><p>${esc(t)}</p>`).join('')}<h3>Suggested actions</h3><ul>${r.act.map(a=>`<li>${esc(a)}</li>`).join('')}</ul></div>
+<h2>Carrier review email</h2><div class=row>${sel('e','Carrier',cs,EMAILC,"(v=>{EMAILC=v;render()})")}<button class=p onclick="navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('em').value)">Copy email</button></div><textarea id=em>${esc(emailText(EMAILC))}</textarea><p class=mut>Default carrier is the lowest scorer under the current weights. Edit the text freely before sending.</p>`},
+audit(){const A=AUDIT;return `<h2>Methodology & Data Audit</h2><div class=two><div class=card><span class=tag>DATA-DERIVED VALUES</span><table><tr><th>Metric</th><th style="text-align:left">Formula</th></tr>${[['OTD %','delivered shipments with actual ≤ promised ÷ delivered shipments × 100'],['Average late days','Σ max(0, actual − promised) ÷ delivered shipments (early never negative)'],['Cost per kg','Σ freight_cost_inr ÷ Σ weight_kg (weighted; rows with missing cost or weight ≤ 0 excluded from both)'],['Damage rate','Damaged ÷ all shipments × 100'],['RTO rate','Returned to Origin ÷ all shipments × 100'],['Combined exception rate','(Damaged + RTO) ÷ all shipments × 100'],['Delivered shipment','status = "Delivered" (only definition used), with valid promised and actual dates']].map(r=>`<tr><td>${r[0]}</td><td style="text-align:left;white-space:normal">${r[1]}</td></tr>`).join('')}</table><p class=mut>Zero denominators show "n/a", never 0.</p></div>
+<div class=card><span class="tag m">MANAGEMENT ASSUMPTIONS</span><table><tr><td>Scorecard weights</td><td style="text-align:left;white-space:normal">OTD ${S.w.otd}%, Quality ${S.w.q}%, Cost ${S.w.c}%, Delay ${S.w.d}% (editable)</td></tr><tr><td>Normalisation</td><td style="text-align:left;white-space:normal">Min–max across carriers; flat range gives 50; carriers under ${S.minN} shipments not scored</td></tr><tr><td>Benchmark rule</td><td style="text-align:left;white-space:normal">Lane sample ≥ ${S.minN}, OTD ≥ ${S.otdMin}%, combined exception ≤ ${S.excMax}%</td></tr><tr><td>Lane</td><td style="text-align:left;white-space:normal">${S.lane=='od'?'Origin DC → destination region':'Destination region'}</td></tr><tr><td>Volume shift</td><td style="text-align:left;white-space:normal">${S.shift}%</td></tr><tr><td>Grades</td><td style="text-align:left;white-space:normal">A ≥ 80, B ≥ 65, C ≥ 50, else D (relative)</td></tr></table></div></div>${verifyPanel()}${DATA?auditPanel():(A?auditPanel():need())}`}};
+function render(){document.getElementById('nav').innerHTML=TABS.map(([k,l])=>`<button class="${S.tab==k?'on':''}" onclick="setS('tab','${k}')">${l}</button>`).join('');document.getElementById('view').innerHTML=V[S.tab]()}
+async function onFile(f){UPLOAD_ERR=null;if(!f)return;try{if(!/\.csv$/i.test(f.name)&&!/text|csv/.test(f.type))throw new Error('Please upload a .csv file (export the Shipments sheet as CSV).');load(await f.text())}catch(e){DATA=null;AUDIT=null;UPLOAD_ERR='Upload failed: '+(e.message||e)}render()}
+if(typeof window!=='undefined')render();if(typeof module!=='undefined')module.exports={load,K,scoreModel,savingsModel,recText,emailText,S,getData:()=>DATA,getAudit:()=>AUDIT,parseCSV,pdate};
+</script></body></html>
